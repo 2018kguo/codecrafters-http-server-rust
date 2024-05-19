@@ -4,6 +4,13 @@ use std::{
     net::{TcpListener, TcpStream},
 };
 
+fn build_response_body(body: &str) -> String {
+    let status_line = "HTTP/1.1 200 OK\r\n";
+    let headers = format!("Content-Type: text/plain\r\nContent-Length: {}\r\n\r\n", body.len());
+    let response_body = status_line.to_owned() + &headers + body;
+    response_body
+}
+
 fn handle_connection(mut stream: TcpStream) {
     let buf_reader = BufReader::new(&mut stream);
     let http_request: Vec<String> = buf_reader
@@ -25,20 +32,35 @@ fn handle_connection(mut stream: TcpStream) {
     // Accept: */*\r\n              // Header that specifies which media types the client can accept
     // \r\n                         // CRLF that marks the end of the headers
 
+    // Example response body
+
+    // Status line
+    // HTTP/1.1 200 OK
+    // \r\n                          // CRLF that marks the end of the status line
+
+    // // Headers
+    // Content-Type: text/plain\r\n  // Header that specifies the format of the response body
+    // Content-Length: 3\r\n         // Header that specifies the size of the response body, in bytes
+    // \r\n                          // CRLF that marks the end of the headers
+
+    // // Response body
+    // abc                           // The string from the request
     // // Request body (empty)
 
     let request_line = &http_request[0];
     let split_request_line: Vec<&str> = request_line.split(" ").collect();
 
-    let path = &split_request_line[1];
+    let path = split_request_line[1];
 
-    let has_path = if path == &"/" { false } else { true };
-
-    let response_404 = "HTTP/1.1 404 Not Found\r\n\r\n";
-    let response = "HTTP/1.1 200 OK\r\n\r\n";
-
-    let response_to_use = if has_path { response_404 } else { response };
-    stream.write_all(response_to_use.as_bytes()).unwrap();
+    let response: String = match path {
+        "/" => "HTTP/1.1 200 OK\r\n\r\n".to_owned(),
+        _path if path.starts_with("/echo/") => {
+            let payload = &path[6..];
+            build_response_body(payload)
+        }
+        _ => "HTTP/1.1 404 Not Found\r\n\r\n".to_owned(),
+    };
+    stream.write_all(response.as_bytes()).unwrap();
 }
 
 fn main() {
