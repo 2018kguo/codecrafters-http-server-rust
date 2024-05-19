@@ -100,7 +100,7 @@ fn main() {
     for stream in listener.incoming() {
         match stream {
             Ok(_stream) => {
-                handle_connection(_stream);
+                std::thread::spawn(|| handle_connection(_stream));
             }
             Err(e) => {
                 println!("error: {}", e);
