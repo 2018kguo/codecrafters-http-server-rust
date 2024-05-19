@@ -3,8 +3,9 @@
 // Uncomment this block to pass the first stage
 use std::{
     collections::HashMap,
-    env, fs,
-    io::{prelude::*, BufReader},
+    env,
+    fs::{self, File},
+    io::prelude::*,
     net::{TcpListener, TcpStream},
 };
 
@@ -30,13 +31,21 @@ fn build_response_body(body: &[u8], content_type: ContentType) -> Vec<u8> {
     response_body_bytes
 }
 
+fn split_stream(mut stream: &TcpStream) -> Result<Vec<String>, &str> {
+    let mut buf = [0u8; 1024];
+    let _ = stream.read(&mut buf).unwrap();
+    let string = String::from_utf8(buf.to_vec()).unwrap();
+    let lines = string
+        .split("\r\n")
+        .map(|s| s.to_string())
+        .filter(|x| !x.is_empty())
+        .map(|x| x.replace('\0', ""))
+        .collect::<Vec<_>>();
+    Ok(lines)
+}
+
 fn handle_connection(mut stream: TcpStream, args: Vec<String>) {
-    let buf_reader = BufReader::new(&mut stream);
-    let http_request: Vec<String> = buf_reader
-        .lines()
-        .map(|result| result.unwrap())
-        .take_while(|line| !line.is_empty())
-        .collect();
+    let http_request: Vec<String> = split_stream(&stream).unwrap();
     println!("{:?}", &http_request);
 
     //     // Request line
@@ -71,31 +80,37 @@ fn handle_connection(mut stream: TcpStream, args: Vec<String>) {
 
     let mut headers_map: HashMap<&str, &str> = HashMap::new();
 
+    let verb = split_request_line[0];
     let path = split_request_line[1];
+    let mut body: Option<String> = None;
+
     for line in &http_request[1..] {
         let split_lines: Vec<&str> = line.split(": ").collect();
-        if split_lines.len() != 2 {
-            panic!("Header malformed");
+        if split_lines.len() == 2 {
+            headers_map.insert(split_lines[0], split_lines[1]);
+        } else {
+            body = Some(line.to_string());
         }
-        headers_map.insert(split_lines[0], split_lines[1]);
     }
 
+    println!("{:?}", body);
     let ok_response = "HTTP/1.1 200 OK\r\n\r\n".as_bytes().to_vec();
     let not_found_response = "HTTP/1.1 404 Not Found\r\n\r\n".as_bytes().to_vec();
+    let created_response = "HTTP/1.1 201 Created\r\n\r\n".as_bytes().to_vec();
 
-    let response: Vec<u8> = match path {
-        "/" => ok_response,
-        _path if path.starts_with("/echo/") => {
+    let response: Vec<u8> = match (path, verb) {
+        ("/", _) => ok_response,
+        (_path, _) if path.starts_with("/echo/") => {
             let payload = &_path[6..];
             build_response_body(payload.as_bytes(), ContentType::Text)
         }
-        _path if path.starts_with("/user-agent") => {
+        (_path, _) if path.starts_with("/user-agent") => {
             let parsed_user_agent_header = headers_map
                 .get("User-Agent")
                 .expect("User Agent header not found");
             build_response_body(&parsed_user_agent_header.as_bytes(), ContentType::Text)
         }
-        _path if path.starts_with("/files/") => {
+        (_path, _) if path.starts_with("/files/") && verb == "GET" => {
             let file_name = &_path[7..];
             let directory_flag = &args
                 .iter()
@@ -118,8 +133,21 @@ fn handle_connection(mut stream: TcpStream, args: Vec<String>) {
                 Err(_) => not_found_response,
             }
         }
+        (_path, _) if path.starts_with("/files/") && verb == "POST" => {
+            let file_name = &_path[7..];
+            let directory_flag = &args
+                .iter()
+                .position(|arg| arg == "--directory")
+                .expect("no directory flag found");
+            let directory_arg = &args[directory_flag + 1];
+            let contents = body.expect("no body provided in payload");
+            let mut file = File::create(directory_arg.to_owned() + file_name).unwrap();
+            file.write_all(contents.as_bytes()).unwrap();
+            created_response
+        }
         _ => not_found_response,
     };
+    println!("DONE!");
     stream.write_all(response.as_slice()).unwrap();
 }
 
