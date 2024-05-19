@@ -3,26 +3,34 @@
 // Uncomment this block to pass the first stage
 use std::{
     collections::HashMap,
+    env, fs,
     io::{prelude::*, BufReader},
     net::{TcpListener, TcpStream},
 };
 
-enum Endpoint {
-    Echo,
-    UserAgent,
+enum ContentType {
+    Text,
+    File,
 }
 
-fn build_response_body(body: &str) -> String {
+fn build_response_body(body: &[u8], content_type: ContentType) -> Vec<u8> {
     let status_line = "HTTP/1.1 200 OK\r\n";
+    let content_type_str = match content_type {
+        ContentType::File => "application/octet-stream",
+        ContentType::Text => "text/plain",
+    };
     let headers = format!(
-        "Content-Type: text/plain\r\nContent-Length: {}\r\n\r\n",
+        "Content-Type: {}\r\nContent-Length: {}\r\n\r\n",
+        content_type_str,
         body.len()
     );
-    let response_body = status_line.to_owned() + &headers + body;
-    response_body
+    let mut response_body_bytes: Vec<u8> = Vec::new();
+    response_body_bytes.extend((status_line.to_owned() + &headers).as_bytes());
+    response_body_bytes.extend(body);
+    response_body_bytes
 }
 
-fn handle_connection(mut stream: TcpStream) {
+fn handle_connection(mut stream: TcpStream, args: Vec<String>) {
     let buf_reader = BufReader::new(&mut stream);
     let http_request: Vec<String> = buf_reader
         .lines()
@@ -72,26 +80,52 @@ fn handle_connection(mut stream: TcpStream) {
         headers_map.insert(split_lines[0], split_lines[1]);
     }
 
-    let response: String = match path {
-        "/" => "HTTP/1.1 200 OK\r\n\r\n".to_owned(),
+    let ok_response = "HTTP/1.1 200 OK\r\n\r\n".as_bytes().to_vec();
+    let not_found_response = "HTTP/1.1 404 Not Found\r\n\r\n".as_bytes().to_vec();
+
+    let response: Vec<u8> = match path {
+        "/" => ok_response,
         _path if path.starts_with("/echo/") => {
             let payload = &_path[6..];
-            build_response_body(payload)
+            build_response_body(payload.as_bytes(), ContentType::Text)
         }
         _path if path.starts_with("/user-agent") => {
             let parsed_user_agent_header = headers_map
                 .get("User-Agent")
                 .expect("User Agent header not found");
-            build_response_body(&parsed_user_agent_header)
+            build_response_body(&parsed_user_agent_header.as_bytes(), ContentType::Text)
         }
-        _ => "HTTP/1.1 404 Not Found\r\n\r\n".to_owned(),
+        _path if path.starts_with("/files/") => {
+            let file_name = &_path[7..];
+            let directory_flag = &args
+                .iter()
+                .position(|arg| arg == "--directory")
+                .expect("no directory flag found");
+            let directory_arg = &args[directory_flag + 1];
+
+            // Concatenate the directory path and file name
+            let file_path = format!("{}/{}", directory_arg, file_name);
+
+            // Open the file
+            let file_result = fs::File::open(file_path);
+
+            match file_result {
+                Ok(mut _file_result) => {
+                    let mut contents: Vec<u8> = Vec::new();
+                    _file_result.read_to_end(&mut contents).unwrap();
+                    build_response_body(&contents.as_slice(), ContentType::File)
+                }
+                Err(_) => not_found_response,
+            }
+        }
+        _ => not_found_response,
     };
-    stream.write_all(response.as_bytes()).unwrap();
+    stream.write_all(response.as_slice()).unwrap();
 }
 
 fn main() {
     // You can use print statements as follows for debugging, they'll be visible when running tests.
-    println!("Logs from your program will appear here!");
+    let args: Vec<String> = env::args().collect();
 
     // Uncomment this block to pass the first stage
     //
@@ -100,7 +134,8 @@ fn main() {
     for stream in listener.incoming() {
         match stream {
             Ok(_stream) => {
-                std::thread::spawn(|| handle_connection(_stream));
+                let cloned_args = args.clone();
+                std::thread::spawn(|| handle_connection(_stream, cloned_args));
             }
             Err(e) => {
                 println!("error: {}", e);
