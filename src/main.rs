@@ -1,12 +1,23 @@
+#![allow(dead_code)]
+
 // Uncomment this block to pass the first stage
 use std::{
+    collections::HashMap,
     io::{prelude::*, BufReader},
     net::{TcpListener, TcpStream},
 };
 
+enum Endpoint {
+    Echo,
+    UserAgent,
+}
+
 fn build_response_body(body: &str) -> String {
     let status_line = "HTTP/1.1 200 OK\r\n";
-    let headers = format!("Content-Type: text/plain\r\nContent-Length: {}\r\n\r\n", body.len());
+    let headers = format!(
+        "Content-Type: text/plain\r\nContent-Length: {}\r\n\r\n",
+        body.len()
+    );
     let response_body = status_line.to_owned() + &headers + body;
     response_body
 }
@@ -50,13 +61,28 @@ fn handle_connection(mut stream: TcpStream) {
     let request_line = &http_request[0];
     let split_request_line: Vec<&str> = request_line.split(" ").collect();
 
+    let mut headers_map: HashMap<&str, &str> = HashMap::new();
+
     let path = split_request_line[1];
+    for line in &http_request[1..] {
+        let split_lines: Vec<&str> = line.split(": ").collect();
+        if split_lines.len() != 2 {
+            panic!("Header malformed");
+        }
+        headers_map.insert(split_lines[0], split_lines[1]);
+    }
 
     let response: String = match path {
         "/" => "HTTP/1.1 200 OK\r\n\r\n".to_owned(),
         _path if path.starts_with("/echo/") => {
-            let payload = &path[6..];
+            let payload = &_path[6..];
             build_response_body(payload)
+        }
+        _path if path.starts_with("/user-agent") => {
+            let parsed_user_agent_header = headers_map
+                .get("User-Agent")
+                .expect("User Agent header not found");
+            build_response_body(&parsed_user_agent_header)
         }
         _ => "HTTP/1.1 404 Not Found\r\n\r\n".to_owned(),
     };
