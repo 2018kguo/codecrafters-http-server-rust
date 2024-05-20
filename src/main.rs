@@ -9,6 +9,8 @@ use std::{
     net::{TcpListener, TcpStream},
 };
 
+use flate2::{write::GzEncoder, Compression};
+
 enum ContentType {
     Text,
     File,
@@ -29,10 +31,20 @@ fn build_response_body(
         ContentType::File => "application/octet-stream",
         ContentType::Text => "text/plain",
     };
+
+    let maybe_compressed_body: Vec<u8> = if encoding_type == Some(EncodingType::Gzip) {
+        let mut encoder = GzEncoder::new(vec![], Compression::default());
+        encoder.write_all(body).unwrap();
+        let compressed_buf = encoder.finish().unwrap();
+        compressed_buf
+    } else {
+        body.to_vec()
+    };
+
     let headers = format!(
         "Content-Type: {}\r\nContent-Length: {}\r\n\r\n",
         content_type_str,
-        body.len()
+        maybe_compressed_body.len()
     );
     let mut response_body_bytes: Vec<u8> = Vec::new();
     let content_encoding_header = if encoding_type == Some(EncodingType::Gzip) {
@@ -42,7 +54,7 @@ fn build_response_body(
     };
     response_body_bytes
         .extend((status_line.to_owned() + content_encoding_header + &headers).as_bytes());
-    response_body_bytes.extend(body);
+    response_body_bytes.extend(maybe_compressed_body.as_slice());
     response_body_bytes
 }
 
