@@ -14,7 +14,16 @@ enum ContentType {
     File,
 }
 
-fn build_response_body(body: &[u8], content_type: ContentType) -> Vec<u8> {
+#[derive(PartialEq, Eq)]
+enum EncodingType {
+    Gzip,
+}
+
+fn build_response_body(
+    body: &[u8],
+    content_type: ContentType,
+    encoding_type: Option<EncodingType>,
+) -> Vec<u8> {
     let status_line = "HTTP/1.1 200 OK\r\n";
     let content_type_str = match content_type {
         ContentType::File => "application/octet-stream",
@@ -26,7 +35,13 @@ fn build_response_body(body: &[u8], content_type: ContentType) -> Vec<u8> {
         body.len()
     );
     let mut response_body_bytes: Vec<u8> = Vec::new();
-    response_body_bytes.extend((status_line.to_owned() + &headers).as_bytes());
+    let content_encoding_header = if encoding_type == Some(EncodingType::Gzip) {
+        "Content-Encoding: gzip\r\n"
+    } else {
+        ""
+    };
+    response_body_bytes
+        .extend((status_line.to_owned() + content_encoding_header + &headers).as_bytes());
     response_body_bytes.extend(body);
     response_body_bytes
 }
@@ -98,19 +113,29 @@ fn handle_connection(mut stream: TcpStream, args: Vec<String>) {
     let not_found_response = "HTTP/1.1 404 Not Found\r\n\r\n".as_bytes().to_vec();
     let created_response = "HTTP/1.1 201 Created\r\n\r\n".as_bytes().to_vec();
 
-    let response: Vec<u8> = match (path, verb) {
-        ("/", _) => ok_response,
-        (_path, _) if path.starts_with("/echo/") => {
+    let encoding_type = headers_map.get("Accept-Encoding");
+    let encoding_type_enum: Option<EncodingType> = match encoding_type {
+        Some(&"gzip") => Some(EncodingType::Gzip),
+        _ => None,
+    };
+
+    let response: Vec<u8> = match (path, verb, encoding_type_enum) {
+        ("/", _, _) => ok_response,
+        (_path, _, _encoding_type_enum) if path.starts_with("/echo/") => {
             let payload = &_path[6..];
-            build_response_body(payload.as_bytes(), ContentType::Text)
+            build_response_body(payload.as_bytes(), ContentType::Text, _encoding_type_enum)
         }
-        (_path, _) if path.starts_with("/user-agent") => {
+        (_path, _, _encoding_type_enum) if path.starts_with("/user-agent") => {
             let parsed_user_agent_header = headers_map
                 .get("User-Agent")
                 .expect("User Agent header not found");
-            build_response_body(&parsed_user_agent_header.as_bytes(), ContentType::Text)
+            build_response_body(
+                &parsed_user_agent_header.as_bytes(),
+                ContentType::Text,
+                _encoding_type_enum,
+            )
         }
-        (_path, _) if path.starts_with("/files/") && verb == "GET" => {
+        (_path, _, _encoding_type_enum) if path.starts_with("/files/") && verb == "GET" => {
             let file_name = &_path[7..];
             let directory_flag = &args
                 .iter()
@@ -128,12 +153,16 @@ fn handle_connection(mut stream: TcpStream, args: Vec<String>) {
                 Ok(mut _file_result) => {
                     let mut contents: Vec<u8> = Vec::new();
                     _file_result.read_to_end(&mut contents).unwrap();
-                    build_response_body(&contents.as_slice(), ContentType::File)
+                    build_response_body(
+                        &contents.as_slice(),
+                        ContentType::File,
+                        _encoding_type_enum,
+                    )
                 }
                 Err(_) => not_found_response,
             }
         }
-        (_path, _) if path.starts_with("/files/") && verb == "POST" => {
+        (_path, _, _encoding_type_enum) if path.starts_with("/files/") && verb == "POST" => {
             let file_name = &_path[7..];
             let directory_flag = &args
                 .iter()
