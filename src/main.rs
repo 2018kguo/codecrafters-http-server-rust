@@ -114,9 +114,16 @@ fn handle_connection(mut stream: TcpStream, args: Vec<String>) {
     let created_response = "HTTP/1.1 201 Created\r\n\r\n".as_bytes().to_vec();
 
     let encoding_type = headers_map.get("Accept-Encoding");
-    let encoding_type_enum: Option<EncodingType> = match encoding_type {
-        Some(&"gzip") => Some(EncodingType::Gzip),
-        _ => None,
+    let encoding_type_values: Vec<&str> = if let Some(etype) = encoding_type {
+        (*etype).split(", ").collect()
+    } else {
+        Vec::new()
+    };
+
+    let encoding_type_enum = if encoding_type_values.contains(&"gzip") {
+        Some(EncodingType::Gzip)
+    } else {
+        None
     };
 
     let response: Vec<u8> = match (path, verb, encoding_type_enum) {
